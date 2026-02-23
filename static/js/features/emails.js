@@ -1,5 +1,8 @@
         // ==================== 邮件相关 ====================
 
+        // 模块内变量：存储上次获取邮件失败的错误详情
+        let lastFetchErrorDetails = {};
+
         // 加载邮件列表
         async function loadEmails(email, forceRefresh = false) {
             const container = document.getElementById('emailList');
@@ -80,10 +83,15 @@
                     container.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">⚠️</div>
-                            <div class="empty-state-text">获取邮件失败，<a href="javascript:void(0)" onclick="showEmailFetchErrorModal(window._lastFetchErrorDetails)" style="color:#409eff;text-decoration:underline;">点击查看详情</a></div>
+                            <div class="empty-state-text">获取邮件失败，<a href="javascript:void(0)" id="showEmailErrorLink" style="color:#409eff;text-decoration:underline;">点击查看详情</a></div>
                         </div>
                     `;
-                    window._lastFetchErrorDetails = data.details || {};
+                    lastFetchErrorDetails = data.details || {};
+                    // 绑定事件监听器
+                    const errorLink = document.getElementById('showEmailErrorLink');
+                    if (errorLink) {
+                        errorLink.addEventListener('click', () => showEmailFetchErrorModal(lastFetchErrorDetails));
+                    }
                 }
             } catch (error) {
                 container.innerHTML = `

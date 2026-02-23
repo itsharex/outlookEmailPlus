@@ -15,6 +15,7 @@
         let isLoadingMore = false; // 是否正在加载更多邮件
         let hasMoreEmails = true; // 是否还有更多邮件
         let currentSkip = 0; // 当前分页偏移量
+        let lastRefreshTime = null; // 上次刷新时间（模块内变量，不再使用window.lastRefreshTime）
 
         // 缓存与信任模式
         let emailListCache = {}; // 结构: { "account_folder": { emails: [], hasMore: bool, skip: int, method: str, count: int } }
@@ -891,8 +892,8 @@ ${details}
                     const stats = data.stats;
 
                     // 优先使用保存的本地刷新时间
-                    if (window.lastRefreshTime && window.lastRefreshTime instanceof Date) {
-                        document.getElementById('lastRefreshTime').textContent = formatDateTime(window.lastRefreshTime.toISOString());
+                    if (lastRefreshTime && lastRefreshTime instanceof Date) {
+                        document.getElementById('lastRefreshTime').textContent = formatDateTime(lastRefreshTime.toISOString());
                     } else if (stats.last_refresh_time) {
                         document.getElementById('lastRefreshTime').textContent = formatDateTime(stats.last_refresh_time);
                     } else {
@@ -967,7 +968,7 @@ ${details}
 
                             // 直接更新统计数据，使用本地时间
                             const now = new Date();
-                            window.lastRefreshTime = now; // 保存刷新时间
+                            lastRefreshTime = now; // 保存刷新时间
                             document.getElementById('lastRefreshTime').textContent = '刚刚';
                             document.getElementById('totalRefreshCount').textContent = data.total;
                             document.getElementById('successRefreshCount').textContent = data.success_count;
