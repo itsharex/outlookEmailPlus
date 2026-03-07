@@ -1,5 +1,20 @@
 # DEVLOG（发布记录）
 
+## v1.5.1（2026-03-07）
+
+### 新增功能
+- **Microsoft Refresh Token 滚动更新**：在刷新成功时自动保存服务端返回的新 refresh_token（加密存储），覆盖单账号刷新/批量刷新/定时任务/失败重试，提升长期稳定性
+
+### 修复
+- **刷新失败信息更清晰**：refresh token 测试接口解析响应更稳健（JSON 解析失败时回退到响应详情），避免错误信息丢失
+
+### 重要变更
+- **刷新接口签名扩展**：新增 `test_refresh_token_with_rotation()` 返回新的 refresh_token；调度器与刷新服务的回调签名更新为 `(success, error_msg, new_refresh_token)`
+
+### 测试/验证
+- 单元测试：`python -m unittest discover -s tests -v`（229 tests，全部通过）
+- 回归关注：Outlook OAuth 单账号刷新、批量刷新、定时刷新任务与失败重试场景下 refresh_token 自动更新
+
 ## v1.5.0（2026-03-06）
 
 ### 新增功能
