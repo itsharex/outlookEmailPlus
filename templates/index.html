@@ -335,6 +335,20 @@
                                 用于对外开放接口鉴权（请求头：X-API-Key）。如需禁用对外开放接口，可清空后保存。
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label class="form-label">对外开放 API 多 Key 配置（JSON）</label>
+                            <textarea class="form-input" id="settingsExternalApiKeysJson" rows="10" placeholder='[
+  {
+    "name": "partner-a",
+    "api_key": "your-key",
+    "enabled": true,
+    "allowed_emails": ["user@example.com"]
+  }
+]' style="font-family: monospace; font-size: 0.84rem;"></textarea>
+                            <div class="form-hint" id="externalApiKeysJsonHint">
+                                用于按调用方维护多个 Key、邮箱范围授权和启停状态。保留已有脱敏 `api_key` 表示不修改该 Key；清空后保存表示清空全部多 Key。
+                            </div>
+                        </div>
 
                         <!-- P1：对外 API 公网安全配置 -->
                         <div id="externalApiAdvancedSettings" style="margin-top: 0.75rem; padding: 1rem; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-light);">

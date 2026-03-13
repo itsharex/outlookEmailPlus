@@ -365,16 +365,16 @@ def api_key_required(f):
 - 使用 `secrets.compare_digest()`，避免直接字符串比较带来的时序差异
 - 鉴权失败统一返回简化错误结构，不携带内部 trace 细节
 
-### 5.6 公网模式扩展设计（后续阶段）
+### 5.6 公网模式扩展设计（v1.1 已实现）
 
-为避免当前开放接口被误用为“可直接公网暴露”的能力，建议在后续阶段补充以下配置项：
+为避免当前开放接口被误用为“可直接公网暴露”的能力，v1.1 已补充以下配置项：
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `external_api_public_mode` | `false` | 是否启用公网模式 |
-| `external_api_ip_whitelist` | `""` | 允许访问 external API 的 IP / CIDR 列表 |
-| `external_api_disable_wait_message` | `true` | 公网模式下默认禁用长轮询接口 |
-| `external_api_disable_raw_content` | `true` | 公网模式下默认禁用 RAW 内容接口 |
+| `external_api_ip_whitelist` | `[]` | 允许访问 external API 的 IP / CIDR 列表 |
+| `external_api_disable_wait_message` | `false` | 公网模式下可动态禁用长轮询接口 |
+| `external_api_disable_raw_content` | `false` | 公网模式下可动态禁用 RAW 内容接口 |
 | `external_api_rate_limit_per_minute` | `60` | 公网模式下对单 IP 或单 API Key 的分钟级限流 |
 
 建议实现约束：
@@ -386,14 +386,10 @@ def api_key_required(f):
    - 请求频率限制
 3. `api_key_required()` 继续保留为必经入口，不与公网模式互斥。
 
-建议后续新增辅助函数：
+当前实现中已通过独立守卫层落地，形态为：
 
 ```python
-def enforce_external_api_public_controls(
-    *,
-    endpoint: str,
-    client_ip: str,
-) -> None:
+def external_api_guards(feature: str | None = None):
     """
     在 public_mode 启用时执行：
     1. 白名单校验
@@ -408,7 +404,7 @@ def enforce_external_api_public_controls(
 |---|---|---|
 | `IP_NOT_ALLOWED` | 403 | 来源 IP 不在白名单 |
 | `FEATURE_DISABLED` | 403 | 当前模式下接口被禁用 |
-| `RATE_LIMITED` | 429 | 请求频率超限 |
+| `RATE_LIMIT_EXCEEDED` | 429 | 请求频率超限 |
 
 ---
 
@@ -749,7 +745,7 @@ raise MailNotFoundError("等待超时，未检测到匹配邮件")
 - 若当前轮次没有匹配邮件，内部会捕获 `MailNotFoundError` 继续轮询
 - 返回结果是消息摘要，不是完整 message detail
 
-### 8.7 `wait-message` 解耦演进设计（后续阶段）
+### 8.7 `wait-message` 解耦演进设计（v1.2 首版已落地）
 
 当前同步轮询实现适用于：
 
@@ -763,7 +759,7 @@ raise MailNotFoundError("等待超时，未检测到匹配邮件")
 - 高并发等待场景
 - 需要稳定 SLA 的对外 API
 
-后续建议演进为两层架构：
+当前已落地的两层形态为：
 
 ```text
 后台轮询器 / worker
@@ -779,15 +775,15 @@ Web API
 
 | 抽象 | 作用 |
 |---|---|
-| `external_message_cache` | 缓存最近消息摘要或匹配结果 |
-| `external_probe_runs` | 记录最近一次探测时间、结果、错误 |
-| `wait_message_async()` | 基于缓存或后台结果返回最新状态 |
+| `external_probe_cache` | 缓存按条件命中的探测状态与结果 |
+| `poll_pending_probes()` | 后台轮询 pending 探测并写回状态 |
+| `create_probe()` / `get_probe_status()` | 创建异步探测并查询最新状态 |
 
 演进策略建议：
 
-1. 首先在公网模式禁用 `wait-message`
-2. 其次引入后台探测状态
-3. 最后再决定是否保留 `wait-message` 对外暴露
+1. 当前已在公网模式支持禁用 `wait-message`
+2. 当前已引入后台探测状态与 `/api/external/probe/{probe_id}`
+3. 后续再决定是否完全收敛同步模式
 
 ---
 
@@ -1256,9 +1252,9 @@ if (!(externalApiKeyIsSet && externalApiKey && externalApiKey === externalApiKey
 - 未配置 `external_api_key` → 403 `API_KEY_NOT_CONFIGURED`
 - 错误 key → 401 `UNAUTHORIZED`
 - 正确 key → 进入 controller
-- `public_mode + IP 不在白名单` → 403 `IP_NOT_ALLOWED`（后续阶段）
-- `public_mode + wait-message 已禁用` → 403 `FEATURE_DISABLED`（后续阶段）
-- `public_mode + 请求频率超限` → 429 `RATE_LIMITED`（后续阶段）
+- `public_mode + IP 不在白名单` → 403 `IP_NOT_ALLOWED`
+- `public_mode + wait-message 已禁用` → 403 `FEATURE_DISABLED`
+- `public_mode + 请求频率超限` → 429 `RATE_LIMIT_EXCEEDED`
 
 ### 15.3 `messages` 接口测试
 
@@ -1308,12 +1304,11 @@ if (!(externalApiKeyIsSet && externalApiKey && externalApiKey === externalApiKey
 补充说明：
 
 - 当前测试验证的是受控环境中的功能正确性
-- 尚未覆盖公网模式下的接口分级、白名单、限流或高并发阻塞场景
-- 若后续引入 `public_mode`，需新增：
-  - 公网模式禁用 `wait-message`
-  - 公网模式禁用或限制 RAW 接口
-  - 白名单命中 / 拒绝
-  - 限流命中返回 429
+- 已覆盖公网模式下的接口分级、白名单与限流基础场景
+- 尚未覆盖的重点转为：
+  - 真实上游探测字段
+  - 更高并发下的阻塞/异步混合场景
+  - 多 API Key 与范围授权模型
 
 ### 15.9 系统接口测试
 

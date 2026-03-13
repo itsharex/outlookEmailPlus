@@ -21,7 +21,10 @@ from outlook_web.security.crypto import (
 # v5：BUG-00011 P2 — Message-ID 去重防止重复推送
 # v6：PRD-00008 P1 — 对外 API 限流表 + 公网模式默认配置
 # v7：PRD-00008 P2 — wait-message 异步探测缓存表
-DB_SCHEMA_VERSION = 7
+# v8：PRD-00008 P1 — 上游真实探测结果缓存表
+# v9：PRD-00008 P2 — 多 API Key 表
+# v10：PRD-00008 P2 — 调用方日级使用统计表
+DB_SCHEMA_VERSION = 10
 DB_SCHEMA_VERSION_KEY = "db_schema_version"
 DB_SCHEMA_LAST_UPGRADE_TRACE_ID_KEY = "db_schema_last_upgrade_trace_id"
 DB_SCHEMA_LAST_UPGRADE_ERROR_KEY = "db_schema_last_upgrade_error"
@@ -566,6 +569,75 @@ def init_db(database_path: Optional[str] = None):
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_probe_email
             ON external_probe_cache(email_addr, status)
+            """)
+
+        # v8: 上游真实探测结果缓存表（PRD-00008 P1）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS external_upstream_probes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_type TEXT NOT NULL,
+                scope_key TEXT NOT NULL,
+                email_addr TEXT NOT NULL DEFAULT '',
+                probe_method TEXT NOT NULL DEFAULT '',
+                probe_ok INTEGER,
+                last_probe_at TEXT NOT NULL DEFAULT '',
+                last_probe_error TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(scope_type, scope_key)
+            )
+            """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_upstream_probe_scope
+            ON external_upstream_probes(scope_type, scope_key)
+            """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_upstream_probe_email
+            ON external_upstream_probes(email_addr, updated_at)
+            """)
+
+        # v9: 对外 API 多 Key 配置表（PRD-00008 P2）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS external_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                api_key_encrypted TEXT NOT NULL,
+                allowed_emails_json TEXT NOT NULL DEFAULT '[]',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_used_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_external_api_keys_enabled
+            ON external_api_keys(enabled, updated_at)
+            """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_external_api_keys_name
+            ON external_api_keys(name)
+            """)
+
+        # v10: 调用方日级使用统计（PRD-00008 P2）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS external_api_consumer_usage_daily (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                consumer_key TEXT NOT NULL,
+                consumer_name TEXT NOT NULL DEFAULT '',
+                usage_date TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                total_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                error_count INTEGER NOT NULL DEFAULT 0,
+                last_status TEXT NOT NULL DEFAULT '',
+                last_used_at TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(consumer_key, usage_date, endpoint)
+            )
+            """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_external_api_consumer_usage_daily_key
+            ON external_api_consumer_usage_daily(consumer_key, usage_date)
             """)
 
         # 迁移现有明文数据为加密数据

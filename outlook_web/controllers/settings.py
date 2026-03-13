@@ -7,6 +7,8 @@ from typing import Any
 from flask import jsonify, request
 
 from outlook_web.audit import log_audit
+from outlook_web.db import get_db
+from outlook_web.repositories import external_api_keys as external_api_keys_repo
 from outlook_web.repositories import settings as settings_repo
 from outlook_web.security.auth import login_required
 from outlook_web.security.crypto import decrypt_data, encrypt_data, hash_password, is_encrypted
@@ -21,6 +23,47 @@ def _mask_secret_value(value: str, head: int = 4, tail: int = 4) -> str:
     if len(safe_value) <= head + tail:
         return "*" * len(safe_value)
     return safe_value[:head] + ("*" * (len(safe_value) - head - tail)) + safe_value[-tail:]
+
+
+def _parse_allowed_emails_input(raw: Any) -> list[str]:
+    if raw in (None, "", []):
+        return []
+    if isinstance(raw, list):
+        values = raw
+    else:
+        text = str(raw).strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            values = parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            values = [item.strip() for item in text.replace("\r", "\n").replace(",", "\n").split("\n")]
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        email_addr = str(item or "").strip().lower()
+        if not email_addr or "@" not in email_addr or email_addr in seen:
+            continue
+        seen.add(email_addr)
+        result.append(email_addr)
+    return result
+
+
+def _parse_bool_input(raw: Any, *, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    return default
 
 
 @login_required
@@ -45,11 +88,30 @@ def api_get_settings() -> Any:
     login_password_value = all_settings.get("login_password") or ""
     gptmail_api_key_value = all_settings.get("gptmail_api_key") or ""
     external_api_key_value = settings_repo.get_external_api_key()
+    external_api_keys = external_api_keys_repo.list_external_api_keys(include_disabled=True)
+    usage_summary = external_api_keys_repo.get_external_api_usage_summary(
+        [item.get("consumer_key") or "" for item in external_api_keys]
+    )
+    for item in external_api_keys:
+        item.update(
+            usage_summary.get(
+                item.get("consumer_key") or "",
+                {
+                    "today_total_count": 0,
+                    "today_success_count": 0,
+                    "today_error_count": 0,
+                    "today_last_used_at": "",
+                },
+            )
+        )
     safe_settings["login_password_set"] = bool(login_password_value)
     safe_settings["gptmail_api_key_set"] = bool(gptmail_api_key_value)
     safe_settings["gptmail_api_key_masked"] = _mask_secret_value(gptmail_api_key_value) if gptmail_api_key_value else ""
     safe_settings["external_api_key_set"] = bool(external_api_key_value)
     safe_settings["external_api_key_masked"] = _mask_secret_value(external_api_key_value) if external_api_key_value else ""
+    safe_settings["external_api_keys"] = external_api_keys
+    safe_settings["external_api_keys_count"] = len(external_api_keys)
+    safe_settings["external_api_multi_key_set"] = bool(external_api_keys)
 
     # P1：公网模式安全配置
     safe_settings["external_api_public_mode"] = settings_repo.get_external_api_public_mode()
@@ -89,10 +151,20 @@ def api_update_settings() -> Any:
     from outlook_web.services import graph as graph_service
     from outlook_web.services import scheduler as scheduler_service
 
-    data = request.json
+    data = request.get_json(silent=True)
+    if data is None or not isinstance(data, dict):
+        return jsonify({"success": False, "error": "请求体必须是 JSON 对象"})
+
     updated = []
     errors = []
     scheduler_reload_needed = False
+    pending_operations: list[Any] = []
+
+    def queue_setting_update(key: str, value: str) -> None:
+        pending_operations.append(lambda key=key, value=value: settings_repo.set_setting(key, value, commit=False))
+
+    def queue_operation(op: Any) -> None:
+        pending_operations.append(op)
 
     # 更新登录密码
     if "login_password" in data:
@@ -103,10 +175,8 @@ def api_update_settings() -> Any:
             else:
                 # 哈希新密码
                 hashed_password = hash_password(new_password)
-                if settings_repo.set_setting("login_password", hashed_password):
-                    updated.append("登录密码")
-                else:
-                    errors.append("更新登录密码失败")
+                queue_setting_update("login_password", hashed_password)
+                updated.append("登录密码")
 
     # 更新 GPTMail API Key
     if "gptmail_api_key" in data:
@@ -115,16 +185,12 @@ def api_update_settings() -> Any:
         if new_api_key and existing_api_key and new_api_key == _mask_secret_value(existing_api_key):
             updated.append("GPTMail API Key（未变更）")
         elif new_api_key:
-            if settings_repo.set_setting("gptmail_api_key", new_api_key):
-                updated.append("GPTMail API Key")
-            else:
-                errors.append("更新 GPTMail API Key 失败")
+            queue_setting_update("gptmail_api_key", new_api_key)
+            updated.append("GPTMail API Key")
         else:
             # 允许清空（用于禁用临时邮箱能力）
-            if settings_repo.set_setting("gptmail_api_key", ""):
-                updated.append("GPTMail API Key（已清空）")
-            else:
-                errors.append("清空 GPTMail API Key 失败")
+            queue_setting_update("gptmail_api_key", "")
+            updated.append("GPTMail API Key（已清空）")
 
     # 更新对外开放 API Key（建议加密存储）
     if "external_api_key" in data:
@@ -138,24 +204,91 @@ def api_update_settings() -> Any:
             updated.append("对外 API Key（未变更）")
         elif new_external_api_key:
             encrypted_key = encrypt_data(new_external_api_key)
-            if settings_repo.set_setting("external_api_key", encrypted_key):
-                updated.append("对外 API Key")
-            else:
-                errors.append("更新对外 API Key 失败")
+            queue_setting_update("external_api_key", encrypted_key)
+            updated.append("对外 API Key")
         else:
-            if settings_repo.set_setting("external_api_key", ""):
-                updated.append("对外 API Key（已清空）")
-            else:
-                errors.append("清空对外 API Key 失败")
+            queue_setting_update("external_api_key", "")
+            updated.append("对外 API Key（已清空）")
+
+    # P2：对外 API 多 Key 配置
+    if "external_api_keys" in data:
+        raw_items = data["external_api_keys"]
+        if not isinstance(raw_items, list):
+            errors.append("external_api_keys 必须是数组")
+        else:
+            existing_keys = {
+                int(item["id"]): item for item in external_api_keys_repo.list_external_api_keys(include_disabled=True)
+            }
+            normalized_items: list[dict[str, Any]] = []
+            seen_names: set[str] = set()
+            for index, item in enumerate(raw_items):
+                if not isinstance(item, dict):
+                    errors.append(f"external_api_keys[{index}] 必须是对象")
+                    continue
+
+                key_id_raw = item.get("id")
+                key_id = None
+                if key_id_raw not in (None, ""):
+                    try:
+                        key_id = int(key_id_raw)
+                    except (ValueError, TypeError):
+                        errors.append(f"external_api_keys[{index}].id 无效")
+                        continue
+                    if key_id not in existing_keys:
+                        errors.append(f"external_api_keys[{index}].id 不存在")
+                        continue
+
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    errors.append(f"external_api_keys[{index}].name 不能为空")
+                    continue
+                name_key = name.lower()
+                if name_key in seen_names:
+                    errors.append(f"external_api_keys[{index}].name 重复")
+                    continue
+                seen_names.add(name_key)
+
+                api_key_value = item.get("api_key")
+                if api_key_value is not None:
+                    api_key_value = str(api_key_value).strip()
+
+                if key_id is None and not api_key_value:
+                    errors.append(f"external_api_keys[{index}].api_key 不能为空")
+                    continue
+
+                existing = existing_keys.get(key_id) if key_id is not None else None
+                if existing and api_key_value == existing.get("api_key_masked"):
+                    api_key_value = None
+
+                allowed_emails = _parse_allowed_emails_input(item.get("allowed_emails"))
+                if item.get("allowed_emails") not in (None, "", []) and not allowed_emails:
+                    errors.append(f"external_api_keys[{index}].allowed_emails 至少包含一个合法邮箱")
+                    continue
+
+                normalized_items.append(
+                    {
+                        "id": key_id,
+                        "name": name,
+                        "api_key": api_key_value,
+                        "allowed_emails": allowed_emails,
+                        "enabled": _parse_bool_input(item.get("enabled"), default=True),
+                    }
+                )
+
+            if not errors:
+                queue_operation(
+                    lambda normalized_items=normalized_items: external_api_keys_repo.replace_external_api_keys(
+                        normalized_items, commit=False
+                    )
+                )
+                updated.append("对外 API 多 Key 配置")
 
     # P1：公网模式安全配置
     if "external_api_public_mode" in data:
         val = str(data["external_api_public_mode"]).lower()
         if val in ("true", "false"):
-            if settings_repo.set_setting("external_api_public_mode", val):
-                updated.append("对外 API 公网模式")
-            else:
-                errors.append("更新公网模式失败")
+            queue_setting_update("external_api_public_mode", val)
+            updated.append("对外 API 公网模式")
         else:
             errors.append("公网模式必须是 true 或 false")
 
@@ -171,10 +304,8 @@ def api_update_settings() -> Any:
             if not isinstance(parsed, list):
                 errors.append("IP 白名单必须是 JSON 数组格式")
             else:
-                if settings_repo.set_setting("external_api_ip_whitelist", whitelist_str):
-                    updated.append("对外 API IP 白名单")
-                else:
-                    errors.append("更新 IP 白名单失败")
+                queue_setting_update("external_api_ip_whitelist", whitelist_str)
+                updated.append("对外 API IP 白名单")
         except (json.JSONDecodeError, TypeError):
             errors.append("IP 白名单格式无效（应为 JSON 数组）")
 
@@ -183,30 +314,25 @@ def api_update_settings() -> Any:
             limit = int(data["external_api_rate_limit_per_minute"])
             if limit < 1 or limit > 10000:
                 errors.append("限流阈值必须在 1-10000 之间")
-            elif settings_repo.set_setting("external_api_rate_limit_per_minute", str(limit)):
-                updated.append("对外 API 限流阈值")
             else:
-                errors.append("更新限流阈值失败")
+                queue_setting_update("external_api_rate_limit_per_minute", str(limit))
+                updated.append("对外 API 限流阈值")
         except (ValueError, TypeError):
             errors.append("限流阈值必须是数字")
 
     if "external_api_disable_raw_content" in data:
         val = str(data["external_api_disable_raw_content"]).lower()
         if val in ("true", "false"):
-            if settings_repo.set_setting("external_api_disable_raw_content", val):
-                updated.append("对外 API 禁用 raw 端点")
-            else:
-                errors.append("更新禁用 raw 端点失败")
+            queue_setting_update("external_api_disable_raw_content", val)
+            updated.append("对外 API 禁用 raw 端点")
         else:
             errors.append("禁用 raw 端点必须是 true 或 false")
 
     if "external_api_disable_wait_message" in data:
         val = str(data["external_api_disable_wait_message"]).lower()
         if val in ("true", "false"):
-            if settings_repo.set_setting("external_api_disable_wait_message", val):
-                updated.append("对外 API 禁用 wait-message 端点")
-            else:
-                errors.append("更新禁用 wait-message 端点失败")
+            queue_setting_update("external_api_disable_wait_message", val)
+            updated.append("对外 API 禁用 wait-message 端点")
         else:
             errors.append("禁用 wait-message 端点必须是 true 或 false")
 
@@ -216,10 +342,9 @@ def api_update_settings() -> Any:
             days = int(data["refresh_interval_days"])
             if days < 1 or days > 90:
                 errors.append("刷新周期必须在 1-90 天之间")
-            elif settings_repo.set_setting("refresh_interval_days", str(days)):
-                updated.append("刷新周期")
             else:
-                errors.append("更新刷新周期失败")
+                queue_setting_update("refresh_interval_days", str(days))
+                updated.append("刷新周期")
         except ValueError:
             errors.append("刷新周期必须是数字")
 
@@ -229,10 +354,9 @@ def api_update_settings() -> Any:
             seconds = int(data["refresh_delay_seconds"])
             if seconds < 0 or seconds > 60:
                 errors.append("刷新间隔必须在 0-60 秒之间")
-            elif settings_repo.set_setting("refresh_delay_seconds", str(seconds)):
-                updated.append("刷新间隔")
             else:
-                errors.append("更新刷新间隔失败")
+                queue_setting_update("refresh_delay_seconds", str(seconds))
+                updated.append("刷新间隔")
         except ValueError:
             errors.append("刷新间隔必须是数字")
 
@@ -244,11 +368,9 @@ def api_update_settings() -> Any:
                 from croniter import croniter
 
                 croniter(cron_expr, datetime.now())
-                if settings_repo.set_setting("refresh_cron", cron_expr):
-                    updated.append("Cron 表达式")
-                    scheduler_reload_needed = True
-                else:
-                    errors.append("更新 Cron 表达式失败")
+                queue_setting_update("refresh_cron", cron_expr)
+                updated.append("Cron 表达式")
+                scheduler_reload_needed = True
             except ImportError:
                 errors.append("croniter 库未安装")
             except Exception as e:
@@ -258,11 +380,9 @@ def api_update_settings() -> Any:
     if "use_cron_schedule" in data:
         use_cron = str(data["use_cron_schedule"]).lower()
         if use_cron in ("true", "false"):
-            if settings_repo.set_setting("use_cron_schedule", use_cron):
-                updated.append("刷新策略")
-                scheduler_reload_needed = True
-            else:
-                errors.append("更新刷新策略失败")
+            queue_setting_update("use_cron_schedule", use_cron)
+            updated.append("刷新策略")
+            scheduler_reload_needed = True
         else:
             errors.append("刷新策略必须是 true 或 false")
 
@@ -270,11 +390,9 @@ def api_update_settings() -> Any:
     if "enable_scheduled_refresh" in data:
         enable = str(data["enable_scheduled_refresh"]).lower()
         if enable in ("true", "false"):
-            if settings_repo.set_setting("enable_scheduled_refresh", enable):
-                updated.append("定时刷新开关")
-                scheduler_reload_needed = True
-            else:
-                errors.append("更新定时刷新开关失败")
+            queue_setting_update("enable_scheduled_refresh", enable)
+            updated.append("定时刷新开关")
+            scheduler_reload_needed = True
         else:
             errors.append("定时刷新开关必须是 true 或 false")
 
@@ -282,10 +400,8 @@ def api_update_settings() -> Any:
     if "enable_auto_polling" in data:
         enable_polling = str(data["enable_auto_polling"]).lower()
         if enable_polling in ("true", "false"):
-            if settings_repo.set_setting("enable_auto_polling", enable_polling):
-                updated.append("自动轮询开关")
-            else:
-                errors.append("更新自动轮询开关失败")
+            queue_setting_update("enable_auto_polling", enable_polling)
+            updated.append("自动轮询开关")
         else:
             errors.append("自动轮询开关必须是 true 或 false")
 
@@ -294,10 +410,9 @@ def api_update_settings() -> Any:
             interval = int(data["polling_interval"])
             if interval < 5 or interval > 300:
                 errors.append("轮询间隔必须在 5-300 秒之间")
-            elif settings_repo.set_setting("polling_interval", str(interval)):
-                updated.append("轮询间隔")
             else:
-                errors.append("更新轮询间隔失败")
+                queue_setting_update("polling_interval", str(interval))
+                updated.append("轮询间隔")
         except ValueError:
             errors.append("轮询间隔必须是数字")
 
@@ -306,10 +421,9 @@ def api_update_settings() -> Any:
             count = int(data["polling_count"])
             if count < 0 or count > 100:
                 errors.append("轮询次数必须在 0-100 次之间（0 表示持续轮询）")
-            elif settings_repo.set_setting("polling_count", str(count)):
-                updated.append("轮询次数")
             else:
-                errors.append("更新轮询次数失败")
+                queue_setting_update("polling_count", str(count))
+                updated.append("轮询次数")
         except ValueError:
             errors.append("轮询次数必须是数字")
 
@@ -319,11 +433,10 @@ def api_update_settings() -> Any:
             tg_interval = int(data["telegram_poll_interval"])
             if tg_interval < 10 or tg_interval > 86400:
                 errors.append("Telegram 轮询间隔必须在 10-86400 秒之间")
-            elif settings_repo.set_setting("telegram_poll_interval", str(tg_interval)):
+            else:
+                queue_setting_update("telegram_poll_interval", str(tg_interval))
                 updated.append("Telegram 轮询间隔")
                 scheduler_reload_needed = True
-            else:
-                errors.append("更新 Telegram 轮询间隔失败")
         except (ValueError, TypeError):
             errors.append("Telegram 轮询间隔必须是数字")
 
@@ -331,28 +444,39 @@ def api_update_settings() -> Any:
         tg_token = str(data["telegram_bot_token"]).strip()
         if tg_token and not tg_token.startswith("****"):
             encrypted_token = encrypt_data(tg_token)
-            if settings_repo.set_setting("telegram_bot_token", encrypted_token):
-                updated.append("Telegram Bot Token")
-            else:
-                errors.append("更新 Telegram Bot Token 失败")
+            queue_setting_update("telegram_bot_token", encrypted_token)
+            updated.append("Telegram Bot Token")
         elif not tg_token:
-            if settings_repo.set_setting("telegram_bot_token", ""):
-                updated.append("Telegram Bot Token（已清空）")
+            queue_setting_update("telegram_bot_token", "")
+            updated.append("Telegram Bot Token（已清空）")
         else:
             # 脱敏占位符（****xxx），跳过不覆盖
             updated.append("Telegram Bot Token（未变更）")
 
     if "telegram_chat_id" in data:
         tg_chat_id = str(data["telegram_chat_id"]).strip()
-        if settings_repo.set_setting("telegram_chat_id", tg_chat_id):
-            updated.append("Telegram Chat ID")
-        else:
-            errors.append("更新 Telegram Chat ID 失败")
+        queue_setting_update("telegram_chat_id", tg_chat_id)
+        updated.append("Telegram Chat ID")
 
     if errors:
         return jsonify({"success": False, "error": "；".join(errors)})
 
     if updated:
+        db = get_db()
+        try:
+            db.execute("BEGIN")
+            for op in pending_operations:
+                result = op()
+                if result is False:
+                    raise RuntimeError("settings_update_failed")
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return jsonify({"success": False, "error": "设置保存失败，请重试"})
+
         scheduler_reloaded = None
         if scheduler_reload_needed:
             try:

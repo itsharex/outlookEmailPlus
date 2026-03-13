@@ -267,19 +267,40 @@ def api_external_health() -> Any:
         except Exception:
             db_ok = False
 
+        probe_summary = {
+            "upstream_probe_ok": None,
+            "last_probe_at": "",
+            "last_probe_error": "",
+        }
+        if db_ok:
+            try:
+                probe_summary = external_api_service.get_upstream_probe_summary("instance", "__instance__")
+            except Exception:
+                probe_summary = {
+                    "upstream_probe_ok": False,
+                    "last_probe_at": utcnow().isoformat() + "Z",
+                    "last_probe_error": "实例上游探测执行失败",
+                }
+
         data = {
             "status": "ok",
             "service": "outlook-email-plus",
             "version": APP_VERSION,
             "server_time_utc": utcnow().isoformat() + "Z",
             "database": "ok" if db_ok else "error",
+            "upstream_probe_ok": probe_summary.get("upstream_probe_ok"),
+            "last_probe_at": probe_summary.get("last_probe_at") or "",
+            "last_probe_error": probe_summary.get("last_probe_error") or "",
         }
         external_api_service.audit_external_api_access(
             action="external_api_access",
             email_addr="",
             endpoint="/api/external/health",
             status="ok",
-            details={"database": data["database"]},
+            details={
+                "database": data["database"],
+                "upstream_probe_ok": data["upstream_probe_ok"],
+            },
         )
         return jsonify(external_api_service.ok(data))
     except Exception as exc:
@@ -346,6 +367,17 @@ def api_external_account_status() -> Any:
             details={"code": "INVALID_PARAM"},
         )
         return jsonify(external_api_service.fail("INVALID_PARAM", "email 参数不合法")), 400
+    try:
+        external_api_service.ensure_external_email_access(email_addr)
+    except external_api_service.ExternalApiError as exc:
+        external_api_service.audit_external_api_access(
+            action="external_api_access",
+            email_addr=email_addr,
+            endpoint="/api/external/account-status",
+            status="error",
+            details={"code": exc.code},
+        )
+        return jsonify(external_api_service.fail(exc.code, exc.message, data=exc.data)), exc.status
 
     account = accounts_repo.get_account_by_email(email_addr)
     if not account:
@@ -379,12 +411,26 @@ def api_external_account_status() -> Any:
         "last_refresh_at": account.get("last_refresh_at"),
         "preferred_method": preferred_method,
         "can_read": can_read,
+        "upstream_probe_ok": None,
+        "probe_method": "",
+        "last_probe_at": "",
+        "last_probe_error": "",
     }
+    if can_read:
+        probe_summary = external_api_service.probe_account_upstream(account)
+        data["upstream_probe_ok"] = probe_summary.get("upstream_probe_ok")
+        data["probe_method"] = probe_summary.get("probe_method") or preferred_method
+        data["last_probe_at"] = probe_summary.get("last_probe_at") or ""
+        data["last_probe_error"] = probe_summary.get("last_probe_error") or ""
     external_api_service.audit_external_api_access(
         action="external_api_access",
         email_addr=email_addr,
         endpoint="/api/external/account-status",
         status="ok",
-        details={"preferred_method": preferred_method, "can_read": can_read},
+        details={
+            "preferred_method": preferred_method,
+            "can_read": can_read,
+            "upstream_probe_ok": data["upstream_probe_ok"],
+        },
     )
     return jsonify(external_api_service.ok(data))

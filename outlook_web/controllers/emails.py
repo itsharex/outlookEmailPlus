@@ -587,6 +587,7 @@ def _parse_external_common_args(*, default_since_minutes: int | None = None) -> 
     email_addr = (request.args.get("email") or "").strip()
     if not email_addr or "@" not in email_addr:
         raise external_api_service.InvalidParamError("email 参数无效")
+    external_api_service.ensure_external_email_access(email_addr)
 
     folder = (request.args.get("folder") or "inbox").strip().lower() or "inbox"
     if folder not in {"inbox", "junkemail", "deleteditems"}:
@@ -982,8 +983,30 @@ def api_external_get_probe_status(probe_id: str) -> Any:
     """P2: 查询异步探测状态与结果"""
     try:
         result = external_api_service.get_probe_status(probe_id)
+        external_api_service.ensure_external_email_access(result.get("email") or "")
+        external_api_service.audit_external_api_access(
+            action="external_api_access",
+            email_addr=result.get("email") or "",
+            endpoint="/api/external/probe/{probe_id}",
+            status="ok",
+            details={"probe_id": probe_id, "probe_status": result.get("status")},
+        )
         return jsonify(external_api_service.ok(result))
     except external_api_service.ExternalApiError as exc:
+        external_api_service.audit_external_api_access(
+            action="external_api_access",
+            email_addr="",
+            endpoint="/api/external/probe/{probe_id}",
+            status="error",
+            details={"code": exc.code, "probe_id": probe_id},
+        )
         return _external_error_response(exc)
     except Exception:
+        external_api_service.audit_external_api_access(
+            action="external_api_access",
+            email_addr="",
+            endpoint="/api/external/probe/{probe_id}",
+            status="error",
+            details={"code": "INTERNAL_ERROR", "probe_id": probe_id},
+        )
         return jsonify(external_api_service.fail("INTERNAL_ERROR", "服务内部错误")), 500

@@ -178,15 +178,17 @@ def api_key_required(f):
 
     规则：
     1. 仅接受 Header 中的 `X-API-Key`
-    2. 未配置 external_api_key 时返回 403（API_KEY_NOT_CONFIGURED）
+    2. 未配置 legacy key 且没有任何启用中的多 Key 时返回 403（API_KEY_NOT_CONFIGURED）
     3. 缺少或错误时返回 401（UNAUTHORIZED）
     4. 不依赖 session，不触发登录跳转
     """
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        from outlook_web.repositories import external_api_keys as external_api_keys_repo
         from outlook_web.repositories import settings as settings_repo
 
+        g.external_api_consumer = None
         provided_key = (request.headers.get("X-API-Key") or "").strip()
         if not provided_key:
             return (
@@ -201,8 +203,10 @@ def api_key_required(f):
                 401,
             )
 
+        matched_consumer = external_api_keys_repo.find_external_api_key_by_plaintext(provided_key)
         configured_key = settings_repo.get_external_api_key()
-        if not configured_key:
+        any_enabled_multi_key_configured = external_api_keys_repo.has_any_external_api_key_configured(enabled_only=True)
+        if not matched_consumer and not configured_key and not any_enabled_multi_key_configured:
             return (
                 jsonify(
                     {
@@ -215,7 +219,20 @@ def api_key_required(f):
                 403,
             )
 
-        if not secrets.compare_digest(str(provided_key), str(configured_key)):
+        if matched_consumer:
+            external_api_keys_repo.mark_external_api_key_used(int(matched_consumer["id"]))
+            g.external_api_consumer = {
+                "id": matched_consumer["id"],
+                "consumer_key": matched_consumer.get("consumer_key") or f'key:{matched_consumer["id"]}',
+                "name": matched_consumer.get("name") or f'key-{matched_consumer["id"]}',
+                "source": "external_api_keys",
+                "allowed_emails": matched_consumer.get("allowed_emails") or [],
+                "enabled": bool(matched_consumer.get("enabled", True)),
+                "is_legacy": False,
+            }
+            return f(*args, **kwargs)
+
+        if not configured_key or not secrets.compare_digest(str(provided_key), str(configured_key)):
             return (
                 jsonify(
                     {
@@ -228,9 +245,25 @@ def api_key_required(f):
                 401,
             )
 
+        g.external_api_consumer = {
+            "id": "legacy-settings",
+            "consumer_key": "legacy:settings.external_api_key",
+            "name": "legacy-external-api-key",
+            "source": "settings.external_api_key",
+            "allowed_emails": [],
+            "enabled": True,
+            "is_legacy": True,
+        }
         return f(*args, **kwargs)
 
     return decorated_function
+
+
+def get_external_api_consumer() -> dict | None:
+    try:
+        return getattr(g, "external_api_consumer", None)
+    except Exception:
+        return None
 
 
 def get_client_ip() -> str:

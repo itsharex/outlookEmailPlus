@@ -29,6 +29,7 @@ class ExternalApiKeySettingsUITests(unittest.TestCase):
         status_code, html = self._get_text(client, "/")
         self.assertEqual(status_code, 200)
         self.assertIn('id="settingsExternalApiKey"', html)
+        self.assertIn('id="settingsExternalApiKeysJson"', html)
 
     def test_main_js_loads_masked_external_api_key_fields(self):
         client = self.app.test_client()
@@ -37,7 +38,9 @@ class ExternalApiKeySettingsUITests(unittest.TestCase):
         status_code, js = self._get_text(client, "/static/js/main.js")
         self.assertEqual(status_code, 200)
         self.assertIn("external_api_key_masked", js)
+        self.assertIn("external_api_keys", js)
         self.assertIn("settingsExternalApiKey", js)
+        self.assertIn("settingsExternalApiKeysJson", js)
         self.assertIn("dataset.maskedValue", js)
 
 

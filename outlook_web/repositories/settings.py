@@ -15,7 +15,7 @@ def get_setting(key: str, default: str = "") -> str:
     return row["value"] if row else default
 
 
-def set_setting(key: str, value: str) -> bool:
+def set_setting(key: str, value: str, *, commit: bool = True) -> bool:
     """设置值"""
     db = get_db()
     try:
@@ -26,7 +26,8 @@ def set_setting(key: str, value: str) -> bool:
             """,
             (key, value),
         )
-        db.commit()
+        if commit:
+            db.commit()
         return True
     except Exception:
         return False

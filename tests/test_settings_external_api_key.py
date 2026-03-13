@@ -12,8 +12,13 @@ class ExternalApiKeySettingsTests(unittest.TestCase):
     def setUp(self):
         with self.app.app_context():
             clear_login_attempts()
+            from outlook_web.db import get_db
             from outlook_web.repositories import settings as settings_repo
 
+            db = get_db()
+            db.execute("DELETE FROM external_api_keys")
+            db.execute("DELETE FROM external_api_consumer_usage_daily")
+            db.commit()
             settings_repo.set_setting("external_api_key", "")
 
     def _login(self, client, password: str = "testpass123"):
@@ -90,6 +95,117 @@ class ExternalApiKeySettingsTests(unittest.TestCase):
             from outlook_web.repositories import settings as settings_repo
 
             self.assertEqual(settings_repo.get_external_api_key(), original)
+
+    def test_get_settings_exposes_external_api_keys_list(self):
+        with self.app.app_context():
+            from outlook_web.repositories import external_api_keys as external_api_keys_repo
+
+            external_api_keys_repo.create_external_api_key(
+                name="partner-a",
+                api_key="multi-key-123",
+                allowed_emails=["user1@example.com"],
+                enabled=True,
+            )
+
+        client = self.app.test_client()
+        self._login(client)
+        resp = client.get("/api/settings")
+
+        self.assertEqual(resp.status_code, 200)
+        settings = resp.get_json().get("settings", {})
+        self.assertTrue(settings.get("external_api_multi_key_set"))
+        self.assertEqual(settings.get("external_api_keys_count"), 1)
+        self.assertEqual(settings.get("external_api_keys", [])[0]["name"], "partner-a")
+        self.assertEqual(settings.get("external_api_keys", [])[0]["allowed_emails"], ["user1@example.com"])
+
+    def test_put_settings_can_replace_external_api_keys(self):
+        client = self.app.test_client()
+        self._login(client)
+
+        resp = client.put(
+            "/api/settings",
+            json={
+                "external_api_keys": [
+                    {
+                        "name": "partner-a",
+                        "api_key": "multi-key-123",
+                        "allowed_emails": ["user1@example.com"],
+                        "enabled": True,
+                    },
+                    {
+                        "name": "partner-b",
+                        "api_key": "multi-key-456",
+                        "allowed_emails": [],
+                        "enabled": False,
+                    },
+                ]
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json().get("success"))
+
+        resp2 = client.get("/api/settings")
+        settings = resp2.get_json().get("settings", {})
+        self.assertEqual(settings.get("external_api_keys_count"), 2)
+        keys = settings.get("external_api_keys", [])
+        self.assertEqual(keys[0]["name"], "partner-a")
+        self.assertTrue(keys[0]["enabled"])
+        self.assertEqual(keys[1]["name"], "partner-b")
+        self.assertFalse(keys[1]["enabled"])
+
+    def test_put_settings_rolls_back_external_api_keys_when_other_field_invalid(self):
+        client = self.app.test_client()
+        self._login(client)
+
+        resp = client.put(
+            "/api/settings",
+            json={
+                "external_api_keys": [
+                    {
+                        "name": "partner-a",
+                        "api_key": "multi-key-123",
+                        "allowed_emails": ["user1@example.com"],
+                        "enabled": True,
+                    }
+                ],
+                "refresh_interval_days": 0,
+            },
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json().get("success"))
+
+        resp2 = client.get("/api/settings")
+        settings = resp2.get_json().get("settings", {})
+        self.assertEqual(settings.get("external_api_keys_count"), 0)
+        self.assertEqual(settings.get("external_api_keys"), [])
+
+    def test_put_settings_parses_string_false_for_external_api_keys_enabled(self):
+        client = self.app.test_client()
+        self._login(client)
+
+        resp = client.put(
+            "/api/settings",
+            json={
+                "external_api_keys": [
+                    {
+                        "name": "partner-a",
+                        "api_key": "multi-key-123",
+                        "allowed_emails": [],
+                        "enabled": "false",
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json().get("success"))
+
+        resp2 = client.get("/api/settings")
+        settings = resp2.get_json().get("settings", {})
+        self.assertEqual(settings.get("external_api_keys_count"), 1)
+        self.assertFalse(settings.get("external_api_keys", [])[0]["enabled"])
 
 
 if __name__ == "__main__":

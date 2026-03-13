@@ -966,6 +966,48 @@ ${details}
             document.getElementById('settingsPassword').value = '';
         }
 
+        function buildExternalApiKeysEditorItems(items) {
+            if (!Array.isArray(items)) return [];
+
+            return items.map((item, index) => {
+                if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                    throw new Error(`第 ${index + 1} 项必须是对象`);
+                }
+
+                const normalized = {
+                    name: item.name || '',
+                    api_key: item.api_key || item.api_key_masked || '',
+                    enabled: !(item.enabled === false || item.enabled === 'false' || item.enabled === 0 || item.enabled === '0'),
+                    allowed_emails: Array.isArray(item.allowed_emails) ? item.allowed_emails : []
+                };
+
+                if (item.id !== undefined && item.id !== null && item.id !== '') {
+                    normalized.id = item.id;
+                }
+
+                return normalized;
+            });
+        }
+
+        function setExternalApiKeysEditor(items) {
+            const editorEl = document.getElementById('settingsExternalApiKeysJson');
+            if (!editorEl) return;
+
+            const normalized = buildExternalApiKeysEditorItems(items);
+            const prettyValue = normalized.length ? JSON.stringify(normalized, null, 2) : '';
+            editorEl.value = prettyValue;
+            editorEl.dataset.originalCanonical = JSON.stringify(normalized);
+
+            const hintEl = document.getElementById('externalApiKeysJsonHint');
+            if (!hintEl) return;
+
+            if (normalized.length > 0) {
+                hintEl.textContent = `当前已配置 ${normalized.length} 个多 Key。保留已有脱敏 api_key 表示不修改该 Key；清空后保存表示清空全部多 Key。`;
+            } else {
+                hintEl.textContent = '用于按调用方维护多个 Key、邮箱范围授权和启停状态。保留已有脱敏 api_key 表示不修改该 Key；清空后保存表示清空全部多 Key。';
+            }
+        }
+
         // 加载设置
         async function loadSettings() {
             try {
@@ -1002,6 +1044,8 @@ ${details}
                             externalHintEl.textContent = '未设置（设置后可通过 /api/external/* 对外开放接口读取邮件与验证码）';
                         }
                     }
+
+                    setExternalApiKeysEditor(data.settings.external_api_keys || []);
 
                     // P1：公网安全配置
                     const publicModeEl = document.getElementById('externalApiPublicMode');
@@ -1125,6 +1169,11 @@ ${details}
             const externalApiKey = externalApiKeyEl ? externalApiKeyEl.value.trim() : '';
             const externalApiKeyMasked = externalApiKeyEl ? (externalApiKeyEl.dataset.maskedValue || '') : '';
             const externalApiKeyIsSet = externalApiKeyEl ? externalApiKeyEl.dataset.isSet === 'true' : false;
+            const externalApiKeysJsonEl = document.getElementById('settingsExternalApiKeysJson');
+            const externalApiKeysRaw = externalApiKeysJsonEl ? externalApiKeysJsonEl.value.trim() : '';
+            const originalExternalApiKeysCanonical = externalApiKeysJsonEl
+                ? (externalApiKeysJsonEl.dataset.originalCanonical || '[]')
+                : '[]';
 
             const refreshDays = document.getElementById('refreshIntervalDays').value;
             const refreshDelay = document.getElementById('refreshDelaySeconds').value;
@@ -1152,6 +1201,38 @@ ${details}
             // 对外开放 API Key：允许清空（空字符串）
             if (!(externalApiKeyIsSet && externalApiKey && externalApiKey === externalApiKeyMasked)) {
                 settings.external_api_key = externalApiKey;
+            }
+
+            if (externalApiKeysJsonEl) {
+                if (externalApiKeysRaw) {
+                    let parsedExternalApiKeys;
+                    try {
+                        parsedExternalApiKeys = JSON.parse(externalApiKeysRaw);
+                    } catch (error) {
+                        showToast('多 Key 配置必须是合法 JSON', 'error');
+                        return;
+                    }
+
+                    if (!Array.isArray(parsedExternalApiKeys)) {
+                        showToast('多 Key 配置必须是 JSON 数组', 'error');
+                        return;
+                    }
+
+                    let normalizedExternalApiKeys;
+                    try {
+                        normalizedExternalApiKeys = buildExternalApiKeysEditorItems(parsedExternalApiKeys);
+                    } catch (error) {
+                        showToast(error.message || '多 Key 配置格式无效', 'error');
+                        return;
+                    }
+
+                    const nextCanonical = JSON.stringify(normalizedExternalApiKeys);
+                    if (nextCanonical !== originalExternalApiKeysCanonical) {
+                        settings.external_api_keys = normalizedExternalApiKeys;
+                    }
+                } else if (originalExternalApiKeysCanonical !== '[]') {
+                    settings.external_api_keys = [];
+                }
             }
 
             // P1：公网安全配置
