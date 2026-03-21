@@ -1,53 +1,72 @@
 # Outlook Email Plus
 
-Outlook Email Plus is a mailbox aggregation web app for registration, verification, and multi-account automation workflows. It brings Outlook OAuth mailboxes, IMAP mailboxes, GPTMail temp mailboxes, verification-code extraction, notifications, controlled external APIs, and mail-pool orchestration into one interface.
+[中文 README](./README.md)
 
-[中文 README](./README.md) | [English README](./README.en.md)
+OutlookMail Plus is a mailbox manager built for individuals and teams that work heavily with registration flows.
 
-## What This Project Is
+Unlike general-purpose email clients, it focuses on **registration and verification** workflows and is deeply optimized around getting those flows done quickly.
 
-This is not just an inbox viewer.
+### Why OutlookMail Plus
 
-It is better suited for workflows such as:
+- **Built for registration workflows**: it removes unnecessary steps as much as possible. You can copy mailbox addresses with one click; after sending a verification email on a signup page, you can return to the manager, click "Verification Code", fetch the latest email, and quickly extract the code or verification link with regex.
+- **Lighter and more focused**: non-core features such as sending mail are intentionally left out, so the interface stays cleaner and every design choice is centered on completing registration tasks.
+- **Broader import compatibility**: it supports mainstream mailbox providers such as Gmail, QQ, and 163, as well as custom IMAP servers. Self-hosted mailboxes also work. Built-in temp mailboxes help reduce privacy exposure.
+- **Automation-friendly**: it exposes APIs for batch registration workflows, including mailbox claiming, verification-code retrieval, and mailbox release.
+- **Third-party notifications**: third-party notification channels are supported. Telegram is already integrated, and important mailboxes can push alerts automatically.
 
-- maintaining large sets of mailboxes in one place
-- reading registration codes, verification links, and notification emails automatically
-- exposing mailbox resources to workers through a controlled mail pool
-- running a public demo site without exposing high-risk settings to visitors
+In short, OutlookMail Plus is a mailbox manager designed specifically for registration workflows.
+
+## Demo Site
+
+Demo site: https://gbcoinystsyz.ap-southeast-1.clawcloudrun.com  
+Login password: 12345678
+
+There are 10 mailbox accounts provided for demonstration. Please do not delete them individually. Their content is periodically restored or reloaded. Do not treat them as your own accounts.
+
+The demo covers most major features in this project, except email push. Telegram push is not enabled there because it requires additional configuration.
+
+## UI Preview
+
+The repository already includes some screenshots, and more can be added later.
+
+![Dashboard](img/仪表盘.png)
+![Mailbox View](img/邮箱界面.png)
+![Verification Code Extraction](img/提取验证码.png)
+![Settings](img/设置界面.png)
 
 ## Recent Updates
 
-This README has been refreshed to match the latest functional changes, including:
+Highlights include:
 
-- broader bilingual UI and i18n coverage
+- broader bilingual UI and more complete i18n coverage
 - unified notification dispatch for business email notifications and Telegram delivery
-- hardened external API controls with single-key, multi-key, IP allowlists, rate limits, and risky-endpoint guards
+- stronger external API controls with single-key, multi-key, allowlist, rate-limit, and dangerous-endpoint disable support
 - mail-pool integrations consolidated under `/api/external/pool/*`
 - removal of the old anonymous `/api/pool/*` endpoints
-- a new demo-site guard that can disable login password changes from Settings
+- a new demo-site guard that can prevent login password changes from the Settings page
 
 ## Core Capabilities
 
 - Multi-mailbox management
   Supports Outlook OAuth, regular IMAP mailboxes, and GPTMail temp mailboxes
 - Bulk import and organization
-  Supports import, groups, tags, search, and export
+  Supports bulk import, tags, search, groups, and export
 - Mail reading and extraction
-  Extract verification codes, links, and raw message content
+  Supports verification-code extraction, link extraction, and raw message viewing
 - Mail pool orchestration
-  Supports claim, release, complete, cooldown recovery, and stale-claim cleanup
+  Supports claiming, releasing, completing, cooldown recovery, and stale-claim recycling
 - Controlled external APIs
-  Supports `X-API-Key`, multiple consumer keys, scoped mailbox access, IP allowlists, and rate limiting
+  Supports `X-API-Key` authentication, multiple consumer keys, mailbox scope restrictions, IP allowlists, and rate limits
 - Notification delivery
-  Supports business email notifications, Telegram push, and test delivery from Settings
+  Supports business email notifications, Telegram push, and test sending
 - Demo-site protection
-  Lets you lock login-password changes at the site level with an environment variable
+  Supports locking the login-password change entry through environment variables so visitors cannot change the backend password from Settings
 
 ## Project Layout
 
 ```text
 outlook_web/          Main Flask application (controllers / routes / services / repositories)
-templates/            HTML templates
+templates/            Page templates
 static/               Frontend scripts and styles
 data/                 SQLite data and runtime files
 tests/                Automated tests
@@ -56,7 +75,7 @@ web_outlook_app.py    Backward-compatible entrypoint
 
 ## Quick Start
 
-### Docker
+### Docker Deployment
 
 ```bash
 docker pull ghcr.io/zeropointsix/outlook-email-plus:latest
@@ -73,9 +92,8 @@ docker run -d \
 
 Notes:
 
-- Always mount `data/` if you want persistent runtime data
-- `SECRET_KEY` must be stable and strong
-- For demo sites, explicitly set `ALLOW_LOGIN_PASSWORD_CHANGE=false`
+- always mount `data/` to avoid losing the database and runtime data
+- `SECRET_KEY` must stay stable and strong; a random 64-character value is recommended
 
 ### Local Run
 
@@ -94,31 +112,31 @@ python -m unittest discover -s tests -v
 ## Common Environment Variables
 
 - `SECRET_KEY`
-  Required session and secret-encryption key
+  Required for session security and sensitive-data encryption
 - `LOGIN_PASSWORD`
-  Initial admin login password; it is stored in the database as a hash after initialization
+  Initial backend login password; after first startup it is hashed and stored in the database
 - `ALLOW_LOGIN_PASSWORD_CHANGE`
-  Whether the login password can be changed in Settings. Set this to `false` for demo sites
+  Whether login password changes are allowed in Settings. For demo sites, set this to `false`
 - `DATABASE_PATH`
-  SQLite path, default `data/outlook_accounts.db`
+  SQLite database path. Default: `data/outlook_accounts.db`
 - `PORT` / `HOST`
-  Web bind address
+  Web server bind address
 - `SCHEDULER_AUTOSTART`
   Whether background scheduler jobs start automatically
 - `OAUTH_CLIENT_ID`
-  Outlook OAuth app ID
+  Outlook OAuth application ID
 - `OAUTH_REDIRECT_URI`
   Outlook OAuth callback URL
 - `GPTMAIL_BASE_URL`
-  GPTMail service base URL
+  GPTMail service URL
 - `GPTMAIL_API_KEY`
-  GPTMail API key for temp-mail features
+  GPTMail API key for temp-mail capabilities
 
 ## Notification Channels
 
 ### Email Notifications
 
-If you want business email notifications, configure a dedicated SMTP service. This channel is independent from Telegram and GPTMail.
+If you want to enable business email notifications, you need to configure SMTP separately. Email notifications, Telegram, and GPTMail are independent channels and do not replace each other.
 
 Minimum required variables:
 
@@ -147,13 +165,13 @@ EMAIL_NOTIFICATION_SMTP_USE_TLS=false
 EMAIL_NOTIFICATION_SMTP_TIMEOUT=15
 ```
 
-Important behavior:
+Notes:
 
 - the Settings page follows a save-first-then-test flow
-- the test endpoint does not read temporary form values
-- the system only uses the persisted `email_notification_recipient`
+- the test endpoint does not read temporary values from the form
+- the system only uses the saved `email_notification_recipient`
 
-### Telegram Delivery
+### Telegram Push
 
 The Settings page supports:
 
@@ -161,60 +179,51 @@ The Settings page supports:
 - `telegram_chat_id`
 - `telegram_poll_interval`
 
-In the current version, Telegram delivery and business email notifications are both handled through the unified notification-dispatch flow.
+In the current version, Telegram push and business email notifications are both handled by the unified notification-dispatch flow.
 
 ## External API and Mail Pool Integration
 
-If you need to connect this project to registration workers or other automation systems, the recommended integration path is the controlled external API:
+If you want to connect this project to registration workers, script platforms, or other automation systems, the recommended path is the controlled external API:
 
 - path prefix: `/api/external/*`
 - auth header: `X-API-Key`
 - mail-pool endpoints: `/api/external/pool/*`
 
-Current external API controls include:
+Current external API capabilities include:
 
 - single-key authentication
 - multi-key configuration
-- mailbox scoping per consumer
+- mailbox scope restrictions per caller
 - public-mode allowlists and rate limits
-- optional disabling of raw-content and long-poll style risky endpoints
+- the ability to disable risky endpoints such as raw-content reading and long polling
 
 Notes:
 
-- the old anonymous `/api/pool/*` endpoints are gone
-- for production, enable controlled public mode and configure IP allowlists
+- the old anonymous `/api/pool/*` endpoints have been removed
+- in production, controlled public mode with allowlists is recommended
 
 ## Demo Site Recommendation
 
-If you want to expose a demo site to other users, start with at least this:
+If you want to expose a demo site to other users, at minimum use:
 
 ```env
 LOGIN_PASSWORD=your-strong-password
 ALLOW_LOGIN_PASSWORD_CHANGE=false
 ```
 
-This keeps the site usable while preventing visitors from changing the admin login password in Settings.
-
-## UI Preview
-
-The repository already includes a few screenshots, and you can add more later as the UI evolves.
-
-![Dashboard](img/仪表盘.png)
-![Mailbox View](img/邮箱界面.png)
-![Verification Code Extraction](img/提取验证码.png)
-![Settings](img/设置界面.png)
+- the site remains usable
+- visitors cannot change the backend login password from Settings
 
 ## Project Documentation
 
-- [Documentation Index](./docs/INDEX.md)
-- [Registration Worker and Mail Pool API](./docs/API/registration-mail-pool-api.en.md)
-- [中文注册与邮箱池接口文档](./docs/API/注册与邮箱池接口文档.md)
+- [中文注册与邮箱池接口文档](./注册与邮箱池接口文档.md)
+- [Registration Worker and Mail Pool API](./registration-mail-pool-api.en.md)
 
-If you are integrating workers or batch workflows, start with the external API and mail-pool docs.
+If you plan to integrate registration workers or batch workflows, start with the mail-pool and external API docs.
 
 ## Acknowledgements
 
-This project builds on:
+This project is built on:
 
 - Flask
 - SQLite
@@ -222,7 +231,7 @@ This project builds on:
 - IMAP
 - APScheduler
 
-It also draws inspiration from:
+It also draws ideas from:
 
 - [assast/outlookEmail](https://github.com/assast/outlookEmail)
 - [gblaowang-i/MailAggregator_Pro](https://github.com/gblaowang-i/MailAggregator_Pro)
