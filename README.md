@@ -42,6 +42,11 @@ OutlookMail Plus 是一款面向个人与团队的注册邮箱管理器。
 
 重点包括：
 
+- 当前稳定版本：`v1.9.2`
+- 新增账号管理“简洁模式”，支持高密度列表、摘要列和标准/简洁模式状态同步
+- 新增备注轻量编辑链路，可直接通过独立 `PATCH` 接口更新备注而不改动账号凭据
+- 新增临时邮箱富内容展示，支持 `cid:` 内联图片、data URL 和远程图片地址
+- 新增按账号类型生成的刷新失败建议，Outlook OAuth 与 IMAP 场景的提示更准确
 - 中英双语界面与更完整的 i18n 覆盖
 - 统一通知分发能力：邮件通知与 Telegram 推送共存
 - 受控外部接口增强：单 Key、多 Key、白名单、限流、危险端点禁用
@@ -82,6 +87,7 @@ web_outlook_app.py    兼容入口
 ### Docker 部署
 
 ```bash
+docker pull ghcr.io/zeropointsix/outlook-email-plus:v1.9.2
 docker pull ghcr.io/zeropointsix/outlook-email-plus:latest
 
 docker run -d \
@@ -91,13 +97,14 @@ docker run -d \
   -e SECRET_KEY=your-secret-key-here \
   -e LOGIN_PASSWORD=your-login-password \
   -e ALLOW_LOGIN_PASSWORD_CHANGE=false \
-  ghcr.io/zeropointsix/outlook-email-plus:latest
+  ghcr.io/zeropointsix/outlook-email-plus:v1.9.2
 ```
 
 说明：
 
 - 建议始终挂载 `data/`，避免数据库与运行数据丢失
 - `SECRET_KEY` 必须稳定且足够强，建议随机64位
+- 生产环境建议优先固定到明确版本标签，例如 `v1.9.2`；`latest` 更适合快速体验
 
 ### 本地运行
 

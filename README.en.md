@@ -38,6 +38,11 @@ The repository already includes some screenshots, and more can be added later.
 
 Highlights include:
 
+- current stable version: `v1.9.2`
+- a new compact mailbox mode for higher-density account operations with synchronized selection state
+- a lightweight remark-edit flow that updates remarks through a dedicated `PATCH` endpoint without touching credentials
+- richer temp-mail rendering with support for `cid:` inline images, data URLs, and remote image URLs
+- more accurate refresh-failure suggestions that branch by Outlook OAuth vs. IMAP account type
 - broader bilingual UI and more complete i18n coverage
 - unified notification dispatch for business email notifications and Telegram delivery
 - stronger external API controls with single-key, multi-key, allowlist, rate-limit, and dangerous-endpoint disable support
@@ -78,6 +83,7 @@ web_outlook_app.py    Backward-compatible entrypoint
 ### Docker Deployment
 
 ```bash
+docker pull ghcr.io/zeropointsix/outlook-email-plus:v1.9.2
 docker pull ghcr.io/zeropointsix/outlook-email-plus:latest
 
 docker run -d \
@@ -87,13 +93,14 @@ docker run -d \
   -e SECRET_KEY=your-secret-key-here \
   -e LOGIN_PASSWORD=your-login-password \
   -e ALLOW_LOGIN_PASSWORD_CHANGE=false \
-  ghcr.io/zeropointsix/outlook-email-plus:latest
+  ghcr.io/zeropointsix/outlook-email-plus:v1.9.2
 ```
 
 Notes:
 
 - always mount `data/` to avoid losing the database and runtime data
 - `SECRET_KEY` must stay stable and strong; a random 64-character value is recommended
+- for production deployments, pin an explicit version tag such as `v1.9.2`; keep `latest` for quick evaluation
 
 ### Local Run
 
