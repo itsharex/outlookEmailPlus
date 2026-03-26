@@ -203,9 +203,22 @@ def api_key_required(f):
                 401,
             )
 
-        matched_consumer = external_api_keys_repo.find_external_api_key_by_plaintext(provided_key)
         configured_key = settings_repo.get_external_api_key()
         any_enabled_multi_key_configured = external_api_keys_repo.has_any_external_api_key_configured(enabled_only=True)
+        if configured_key and secrets.compare_digest(str(provided_key), str(configured_key)):
+            g.external_api_consumer = {
+                "id": "legacy-settings",
+                "consumer_key": "legacy:settings.external_api_key",
+                "name": "legacy-external-api-key",
+                "source": "settings.external_api_key",
+                "allowed_emails": [],
+                "pool_access": True,
+                "enabled": True,
+                "is_legacy": True,
+            }
+            return f(*args, **kwargs)
+
+        matched_consumer = external_api_keys_repo.find_external_api_key_by_plaintext(provided_key)
         if not matched_consumer and not configured_key and not any_enabled_multi_key_configured:
             return (
                 jsonify(
@@ -233,30 +246,17 @@ def api_key_required(f):
             }
             return f(*args, **kwargs)
 
-        if not configured_key or not secrets.compare_digest(str(provided_key), str(configured_key)):
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "code": "UNAUTHORIZED",
-                        "message": "API Key 缺失或无效",
-                        "data": None,
-                    }
-                ),
-                401,
-            )
-
-        g.external_api_consumer = {
-            "id": "legacy-settings",
-            "consumer_key": "legacy:settings.external_api_key",
-            "name": "legacy-external-api-key",
-            "source": "settings.external_api_key",
-            "allowed_emails": [],
-            "pool_access": True,
-            "enabled": True,
-            "is_legacy": True,
-        }
-        return f(*args, **kwargs)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "code": "UNAUTHORIZED",
+                    "message": "API Key 缺失或无效",
+                    "data": None,
+                }
+            ),
+            401,
+        )
 
     return decorated_function
 
